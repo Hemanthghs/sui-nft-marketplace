@@ -79,7 +79,7 @@ public entry fun list_nft(
         listed_at,
     };
 
-    table::add(&mut marketplace.listings, nft_id, listing);
+    table::add(&mut marketplace.listings, nft_id, listing); 
 }
 
 public entry fun unlist_nft(marketplace: &mut Marketplace, nft_id: ID, ctx: &mut TxContext) {
@@ -107,7 +107,7 @@ public entry fun buy_nft(
 
     let buyer = tx_context::sender(ctx);
     assert!(buyer != seller, E_CANNOT_BUY_OWN_NFT);
-
+ 
     let payment_amount = coin::value(&payment);
     assert!(payment_amount >= price, E_INSUFFICIENT_PAYMENT);
 
