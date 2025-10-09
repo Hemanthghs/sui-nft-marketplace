@@ -116,7 +116,7 @@ public entry fun place_bid(
         let prev_bidder = *option::borrow(&auction.highest_bidder);
         if (table::contains(&auction_house.held_bids, prev_bidder)) {
             let prev_bid = table::remove(&mut auction_house.held_bids, prev_bidder);
-            let refund_coin = coin::from_balance(prev_bid, ctx);
+            let refund_coin = coin::from_balance(prev_bid, ctx); 
             transfer::public_transfer(refund_coin, prev_bidder);
         };
     };
