@@ -26,6 +26,13 @@ interface NFTData {
   seller?: string;
 }
 
+interface MarketplaceStats {
+  total_listings: string;
+  total_volume: string;
+  total_sales: string;
+  collected_fees: string;
+}
+
 function App() {
   return (
     <>
@@ -109,6 +116,7 @@ function CreateNFT() {
   const [imageUrl, setImageUrl] = useState<string>("");
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const [status, setStatus] = useState<StatusMessage>({ type: null, message: "" });
+  const [stats, setStats] = useState<MarketplaceStats | null>(null);
 
   const { data: balanceData } = useSuiClientQuery(
     "getBalance",
@@ -117,6 +125,51 @@ function CreateNFT() {
   );
 
   const balance = balanceData ? Number(balanceData.totalBalance) / 1e9 : 0;
+
+  // Fetch marketplace stats
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const tx = new Transaction();
+        tx.moveCall({
+          target: `${MARKETPLACE_PACKAGE_ID}::marketplace::get_marketplace_stats`,
+          arguments: [tx.object(MARKETPLACE_OBJECT_ID)],
+        });
+
+        const result = await suiClient.devInspectTransactionBlock({
+          transactionBlock: tx,
+          sender: account?.address as string,
+        });
+
+        if (result.results && result.results[0]) {
+          const returnValues = result.results[0].returnValues;
+          if (returnValues && returnValues[0]) {
+            const [bytes] = returnValues[0];
+            // Parse the bytes to get the stats
+            // The struct has 4 u64 fields: total_listings, total_volume, total_sales, collected_fees
+            const view = new DataView(new Uint8Array(bytes).buffer);
+            const total_listings = view.getBigUint64(0, true).toString();
+            const total_volume = view.getBigUint64(8, true).toString();
+            const total_sales = view.getBigUint64(16, true).toString();
+            const collected_fees = view.getBigUint64(24, true).toString();
+
+            setStats({
+              total_listings,
+              total_volume,
+              total_sales,
+              collected_fees,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching marketplace stats:", error);
+      }
+    };
+
+    if (account) {
+      fetchStats();
+    }
+  }, [account, suiClient]);
 
   const handleCreateNFT = () => {
     if (balance < 0.01) {
@@ -170,6 +223,37 @@ function CreateNFT() {
     <Card style={{ maxWidth: "600px", margin: "0 auto" }}>
       <Flex direction="column" gap="4">
         <Heading size="5">Create New NFT</Heading>
+
+        {/* Marketplace Stats */}
+        {stats && (
+          <Card style={{ backgroundColor: "var(--blue-3)" }}>
+            <Flex direction="column" gap="2">
+              <Heading size="3">Marketplace Statistics</Heading>
+              <Grid columns="2" gap="3">
+                <Flex direction="column">
+                  <Text size="1" color="gray">Total Listings</Text>
+                  <Text size="3" weight="bold">{stats.total_listings}</Text>
+                </Flex>
+                <Flex direction="column">
+                  <Text size="1" color="gray">Total Sales</Text>
+                  <Text size="3" weight="bold">{stats.total_sales}</Text>
+                </Flex>
+                <Flex direction="column">
+                  <Text size="1" color="gray">Total Volume</Text>
+                  <Text size="3" weight="bold">
+                    {(Number(stats.total_volume) / 1e9).toFixed(2)} SUI
+                  </Text>
+                </Flex>
+                <Flex direction="column">
+                  <Text size="1" color="gray">Collected Fees</Text>
+                  <Text size="3" weight="bold">
+                    {(Number(stats.collected_fees) / 1e9).toFixed(4)} SUI
+                  </Text>
+                </Flex>
+              </Grid>
+            </Flex>
+          </Card>
+        )}
 
         <Flex justify="between" align="center">
           <Text size="2" color="gray">Balance:</Text>
