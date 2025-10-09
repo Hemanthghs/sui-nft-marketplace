@@ -3,6 +3,7 @@ import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSuiC
 import { Box, Container, Flex, Heading, Card, TextField, TextArea, Button, Text, Tabs, Grid, Badge } from "@radix-ui/themes";
 import { Transaction } from "@mysten/sui/transactions";
 
+
 // Replace with your actual deployed package IDs
 const NFT_PACKAGE_ID =
   "0x9dc9a29c84fdd5278de566d6289951e1511b5048d4ec1e7f5189fcafc5338b6b";
@@ -10,6 +11,10 @@ const MARKETPLACE_PACKAGE_ID =
   "0x9dc9a29c84fdd5278de566d6289951e1511b5048d4ec1e7f5189fcafc5338b6b"; // Replace with your marketplace package ID
 const MARKETPLACE_OBJECT_ID =
   "0xac52ae47ab7fa4672b4ad6d697293239ee8285df909080c1d84360acf3237f16"; // Replace with your shared Marketplace object ID
+
+const AUCTION_PACKAGE_ID = "0x9dc9a29c84fdd5278de566d6289951e1511b5048d4ec1e7f5189fcafc5338b6b"; // Replace with your auction package ID
+const AUCTION_HOUSE_OBJECT_ID = "0xab1d95a4f97537a0c24fe127e8d43292c15699c7799529d67bc8cdc692a5ed49"; // Replace with your shared AuctionHouse object ID
+const CLOCK_OBJECT_ID = "0x6"; // Sui Clock object (standard address)
 
 interface StatusMessage {
   type: "success" | "error" | null;
@@ -31,6 +36,23 @@ interface MarketplaceStats {
   total_volume: string;
   total_sales: string;
   collected_fees: string;
+}
+
+interface AuctionData {
+  id: string;
+  nft: NFTData;
+  seller: string;
+  starting_price: number;
+  current_bid: number;
+  highest_bidder: string | null;
+  end_time: number;
+  created_at: number;
+}
+
+interface AuctionStats {
+  total_auctions: string;
+  active_auctions: string;
+  completed_auctions: string;
 }
 
 function App() {
@@ -87,6 +109,7 @@ function MarketplaceTabs() {
         <Tabs.Trigger value="create">Create NFT</Tabs.Trigger>
         <Tabs.Trigger value="my-nfts">My NFTs</Tabs.Trigger>
         <Tabs.Trigger value="marketplace">Marketplace</Tabs.Trigger>
+        <Tabs.Trigger value="auctions">Auctions</Tabs.Trigger>
       </Tabs.List>
 
       <Box pt="4">
@@ -100,6 +123,10 @@ function MarketplaceTabs() {
 
         <Tabs.Content value="marketplace">
           <MarketplaceListings />
+        </Tabs.Content>
+
+        <Tabs.Content value="auctions">
+          <AuctionsTab />
         </Tabs.Content>
       </Box>
     </Tabs.Root>
@@ -126,7 +153,6 @@ function CreateNFT() {
 
   const balance = balanceData ? Number(balanceData.totalBalance) / 1e9 : 0;
 
-  // Fetch marketplace stats
   useEffect(() => {
     const fetchStats = async () => {
       try {
@@ -145,8 +171,6 @@ function CreateNFT() {
           const returnValues = result.results[0].returnValues;
           if (returnValues && returnValues[0]) {
             const [bytes] = returnValues[0];
-            // Parse the bytes to get the stats
-            // The struct has 4 u64 fields: total_listings, total_volume, total_sales, collected_fees
             const view = new DataView(new Uint8Array(bytes).buffer);
             const total_listings = view.getBigUint64(0, true).toString();
             const total_volume = view.getBigUint64(8, true).toString();
@@ -224,7 +248,6 @@ function CreateNFT() {
       <Flex direction="column" gap="4">
         <Heading size="5">Create New NFT</Heading>
 
-        {/* Marketplace Stats */}
         {stats && (
           <Card style={{ backgroundColor: "var(--blue-3)" }}>
             <Flex direction="column" gap="2">
@@ -385,6 +408,9 @@ function NFTCard({ nft, isOwned }: NFTCardProps) {
   
   const [listPrice, setListPrice] = useState<string>("");
   const [showListForm, setShowListForm] = useState<boolean>(false);
+  const [showAuctionForm, setShowAuctionForm] = useState<boolean>(false);
+  const [auctionStartPrice, setAuctionStartPrice] = useState<string>("");
+  const [auctionDuration, setAuctionDuration] = useState<string>("24");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [status, setStatus] = useState<StatusMessage>({ type: null, message: "" });
 
@@ -415,6 +441,58 @@ function NFTCard({ nft, isOwned }: NFTCardProps) {
           suiClient.waitForTransaction({ digest: result.digest }).then(() => {
             setStatus({ type: "success", message: "NFT listed!" });
             setShowListForm(false);
+            setIsProcessing(false);
+          }).catch((error) => {
+            console.error("Error waiting for transaction:", error);
+            setStatus({ type: "error", message: "Transaction submitted but confirmation failed" });
+            setIsProcessing(false);
+          });
+        },
+        onError: (error) => {
+          setStatus({ type: "error", message: error.message });
+          setIsProcessing(false);
+        },
+      }
+    );
+  };
+
+  const handleCreateAuction = () => {
+    const price = parseFloat(auctionStartPrice);
+    const duration = parseFloat(auctionDuration);
+    
+    if (!price || price <= 0) {
+      setStatus({ type: "error", message: "Invalid starting price" });
+      return;
+    }
+    
+    if (!duration || duration < 1 || duration > 168) {
+      setStatus({ type: "error", message: "Duration must be between 1-168 hours" });
+      return;
+    }
+
+    setIsProcessing(true);
+    const priceInMist = Math.floor(price * 1e9);
+    const durationInMs = Math.floor(duration * 3600000);
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${AUCTION_PACKAGE_ID}::auction::create_auction`,
+      arguments: [
+        tx.object(AUCTION_HOUSE_OBJECT_ID),
+        tx.object(nft.id),
+        tx.pure.u64(priceInMist),
+        tx.pure.u64(durationInMs),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: (result) => {
+          suiClient.waitForTransaction({ digest: result.digest }).then(() => {
+            setStatus({ type: "success", message: "Auction created!" });
+            setShowAuctionForm(false);
             setIsProcessing(false);
           }).catch((error) => {
             console.error("Error waiting for transaction:", error);
@@ -530,10 +608,15 @@ function NFTCard({ nft, isOwned }: NFTCardProps) {
           </Text>
         )}
 
-        {isOwned && !showListForm && (
-          <Button size="2" onClick={() => setShowListForm(true)} disabled={isProcessing}>
-            List for Sale
-          </Button>
+        {isOwned && !showListForm && !showAuctionForm && (
+          <Flex gap="2">
+            <Button size="2" onClick={() => setShowListForm(true)} disabled={isProcessing}>
+              List for Sale
+            </Button>
+            <Button size="2" variant="soft" onClick={() => setShowAuctionForm(true)} disabled={isProcessing}>
+              Create Auction
+            </Button>
+          </Flex>
         )}
 
         {isOwned && showListForm && (
@@ -548,6 +631,29 @@ function NFTCard({ nft, isOwned }: NFTCardProps) {
                 List
               </Button>
               <Button size="2" variant="soft" onClick={() => setShowListForm(false)}>
+                Cancel
+              </Button>
+            </Flex>
+          </Flex>
+        )}
+
+        {isOwned && showAuctionForm && (
+          <Flex direction="column" gap="2">
+            <TextField.Root 
+              placeholder="Starting Price in SUI" 
+              value={auctionStartPrice} 
+              onChange={(e) => setAuctionStartPrice(e.target.value)} 
+            />
+            <TextField.Root 
+              placeholder="Duration (hours, 1-168)" 
+              value={auctionDuration} 
+              onChange={(e) => setAuctionDuration(e.target.value)} 
+            />
+            <Flex gap="2">
+              <Button size="2" onClick={handleCreateAuction} disabled={isProcessing}>
+                Create
+              </Button>
+              <Button size="2" variant="soft" onClick={() => setShowAuctionForm(false)}>
                 Cancel
               </Button>
             </Flex>
@@ -643,6 +749,415 @@ function MarketplaceListings() {
         <NFTCard key={nft.id} nft={nft} isOwned={false} />
       ))}
     </Grid>
+  );
+}
+
+function AuctionsTab() {
+  return (
+    <Flex direction="column" gap="4">
+      <AuctionStatsCard />
+      <ActiveAuctions />
+    </Flex>
+  );
+}
+
+function AuctionStatsCard() {
+  const account = useCurrentAccount();
+  const suiClient = useSuiClient();
+  const [stats, setStats] = useState<AuctionStats | null>(null);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const tx = new Transaction();
+        tx.moveCall({
+          target: `${AUCTION_PACKAGE_ID}::auction::get_auction_stats`,
+          arguments: [tx.object(AUCTION_HOUSE_OBJECT_ID)],
+        });
+
+        const result = await suiClient.devInspectTransactionBlock({
+          transactionBlock: tx,
+          sender: account?.address as string,
+        });
+
+        if (result.results && result.results[0]) {
+          const returnValues = result.results[0].returnValues;
+          if (returnValues && returnValues[0]) {
+            const [bytes] = returnValues[0];
+            const view = new DataView(new Uint8Array(bytes).buffer);
+            const total_auctions = view.getBigUint64(0, true).toString();
+            const active_auctions = view.getBigUint64(8, true).toString();
+            const completed_auctions = view.getBigUint64(16, true).toString();
+
+            setStats({
+              total_auctions,
+              active_auctions,
+              completed_auctions,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching auction stats:", error);
+      }
+    };
+
+    if (account) {
+      fetchStats();
+    }
+  }, [account, suiClient]);
+
+  if (!stats) {
+    return <Text>Loading auction statistics...</Text>;
+  }
+
+  return (
+    <Card style={{ backgroundColor: "var(--purple-3)" }}>
+      <Flex direction="column" gap="2">
+        <Heading size="3">Auction Statistics</Heading>
+        <Grid columns="3" gap="3">
+          <Flex direction="column">
+            <Text size="1" color="gray">Total Auctions</Text>
+            <Text size="3" weight="bold">{stats.total_auctions}</Text>
+          </Flex>
+          <Flex direction="column">
+            <Text size="1" color="gray">Active Auctions</Text>
+            <Text size="3" weight="bold">{stats.active_auctions}</Text>
+          </Flex>
+          <Flex direction="column">
+            <Text size="1" color="gray">Completed</Text>
+            <Text size="3" weight="bold">{stats.completed_auctions}</Text>
+          </Flex>
+        </Grid>
+      </Flex>
+    </Card>
+  );
+}
+
+function ActiveAuctions() {
+  const suiClient = useSuiClient();
+  const [auctions, setAuctions] = useState<AuctionData[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    const fetchAuctions = async () => {
+      try {
+        const auctionHouseObj = await suiClient.getObject({
+          id: AUCTION_HOUSE_OBJECT_ID,
+          options: { showContent: true },
+        });
+
+        const fields = auctionHouseObj.data?.content as any;
+        const auctionsTable = fields?.fields?.auctions?.fields?.id?.id;
+
+        if (auctionsTable) {
+          const dynamicFields = await suiClient.getDynamicFields({
+            parentId: auctionsTable,
+          });
+
+          const auctionPromises = dynamicFields.data.map(async (field: any) => {
+            const auctionObj = await suiClient.getObject({
+              id: field.objectId,
+              options: { showContent: true },
+            });
+            
+            const auctionFields = (auctionObj.data?.content as any)?.fields?.value?.fields;
+            const nftFields = auctionFields?.nft?.fields;
+
+            return {
+              id: auctionFields?.id,
+              nft: {
+                id: auctionFields?.id,
+                name: nftFields?.name || "Unknown",
+                description: nftFields?.description || "",
+                image_url: nftFields?.image_url || "",
+                creator: nftFields?.creator,
+              },
+              seller: auctionFields?.seller,
+              starting_price: parseInt(auctionFields?.starting_price),
+              current_bid: parseInt(auctionFields?.current_bid),
+              highest_bidder: auctionFields?.highest_bidder?.vec?.[0] || null,
+              end_time: parseInt(auctionFields?.end_time),
+              created_at: parseInt(auctionFields?.created_at),
+            };
+          });
+
+          const resolvedAuctions = await Promise.all(auctionPromises);
+          setAuctions(resolvedAuctions);
+        }
+        setLoading(false);
+      } catch (error) {
+        console.error("Error fetching auctions:", error);
+        setLoading(false);
+      }
+    };
+
+    fetchAuctions();
+  }, [suiClient]);
+
+  if (loading) {
+    return <Text>Loading auctions...</Text>;
+  }
+
+  if (auctions.length === 0) {
+    return (
+      <Card>
+        <Flex direction="column" align="center" py="5">
+          <Text size="3" color="gray">No active auctions</Text>
+        </Flex>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      <Heading size="4">Active Auctions</Heading>
+      <Grid columns="3" gap="4">
+        {auctions.map((auction) => (
+          <AuctionCard key={auction.id} auction={auction} />
+        ))}
+      </Grid>
+    </>
+  );
+}
+
+interface AuctionCardProps {
+  auction: AuctionData;
+}
+
+function AuctionCard({ auction }: AuctionCardProps) {
+  const account = useCurrentAccount();
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction();
+  const suiClient = useSuiClient();
+  
+  const [bidAmount, setBidAmount] = useState<string>("");
+  const [showBidForm, setShowBidForm] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [status, setStatus] = useState<StatusMessage>({ type: null, message: "" });
+  const [timeRemaining, setTimeRemaining] = useState<string>("");
+
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = Date.now();
+      const remaining = auction.end_time - now;
+
+      if (remaining <= 0) {
+        setTimeRemaining("Ended");
+        return;
+      }
+
+      const hours = Math.floor(remaining / 3600000);
+      const minutes = Math.floor((remaining % 3600000) / 60000);
+      const seconds = Math.floor((remaining % 60000) / 1000);
+
+      setTimeRemaining(`${hours}h ${minutes}m ${seconds}s`);
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+
+    return () => clearInterval(interval);
+  }, [auction.end_time]);
+
+  const handlePlaceBid = () => {
+    const bid = parseFloat(bidAmount);
+    const minBid = auction.current_bid / 1e9;
+
+    if (!bid || bid <= minBid) {
+      setStatus({ type: "error", message: `Bid must be higher than ${minBid.toFixed(2)} SUI` });
+      return;
+    }
+
+    setIsProcessing(true);
+    const bidInMist = Math.floor(bid * 1e9);
+
+    const tx = new Transaction();
+    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(bidInMist)]);
+    
+    tx.moveCall({
+      target: `${AUCTION_PACKAGE_ID}::auction::place_bid`,
+      arguments: [
+        tx.object(AUCTION_HOUSE_OBJECT_ID),
+        tx.pure.id(auction.id),
+        coin,
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: (result) => {
+          suiClient.waitForTransaction({ digest: result.digest }).then(() => {
+            setStatus({ type: "success", message: "Bid placed!" });
+            setShowBidForm(false);
+            setBidAmount("");
+            setIsProcessing(false);
+          }).catch((error) => {
+            console.error("Error waiting for transaction:", error);
+            setStatus({ type: "error", message: "Transaction submitted but confirmation failed" });
+            setIsProcessing(false);
+          });
+        },
+        onError: (error) => {
+          setStatus({ type: "error", message: error.message });
+          setIsProcessing(false);
+        },
+      }
+    );
+  };
+
+  const handleFinalizeAuction = () => {
+    setIsProcessing(true);
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${AUCTION_PACKAGE_ID}::auction::finalize_auction`,
+      arguments: [
+        tx.object(AUCTION_HOUSE_OBJECT_ID),
+        tx.pure.id(auction.id),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: (result) => {
+          suiClient.waitForTransaction({ digest: result.digest }).then(() => {
+            setStatus({ type: "success", message: "Auction finalized!" });
+            setIsProcessing(false);
+          }).catch((error) => {
+            console.error("Error waiting for transaction:", error);
+            setStatus({ type: "error", message: "Transaction submitted but confirmation failed" });
+            setIsProcessing(false);
+          });
+        },
+        onError: (error) => {
+          setStatus({ type: "error", message: error.message });
+          setIsProcessing(false);
+        },
+      }
+    );
+  };
+
+  const handleCancelAuction = () => {
+    setIsProcessing(true);
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${AUCTION_PACKAGE_ID}::auction::cancel_auction`,
+      arguments: [
+        tx.object(AUCTION_HOUSE_OBJECT_ID),
+        tx.pure.id(auction.id),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: (result) => {
+          suiClient.waitForTransaction({ digest: result.digest }).then(() => {
+            setStatus({ type: "success", message: "Auction cancelled!" });
+            setIsProcessing(false);
+          }).catch((error) => {
+            console.error("Error waiting for transaction:", error);
+            setStatus({ type: "error", message: "Transaction submitted but confirmation failed" });
+            setIsProcessing(false);
+          });
+        },
+        onError: (error) => {
+          setStatus({ type: "error", message: error.message });
+          setIsProcessing(false);
+        },
+      }
+    );
+  };
+
+  const isAuctionEnded = Date.now() >= auction.end_time;
+  const isSeller = auction.seller === account?.address;
+  const isHighestBidder = auction.highest_bidder === account?.address;
+
+  return (
+    <Card>
+      <Flex direction="column" gap="3">
+        <img 
+          src={auction.nft.image_url} 
+          alt={auction.nft.name} 
+          style={{ 
+            width: "100%", 
+            height: "200px", 
+            objectFit: "cover", 
+            borderRadius: "8px" 
+          }} 
+        />
+        
+        <Heading size="4">{auction.nft.name}</Heading>
+        <Text size="2" color="gray">{auction.nft.description}</Text>
+        
+        <Flex direction="column" gap="1">
+          <Flex justify="between">
+            <Text size="2" color="gray">Current Bid:</Text>
+            <Text size="2" weight="bold">{(auction.current_bid / 1e9).toFixed(2)} SUI</Text>
+          </Flex>
+          <Flex justify="between">
+            <Text size="2" color="gray">Time Remaining:</Text>
+            <Text size="2" weight="bold" color={isAuctionEnded ? "red" : "green"}>
+              {timeRemaining}
+            </Text>
+          </Flex>
+          {auction.highest_bidder && (
+            <Flex justify="between">
+              <Text size="2" color="gray">Highest Bidder:</Text>
+              <Text size="1" weight="bold">
+                {isHighestBidder ? "You" : `${auction.highest_bidder.slice(0, 6)}...`}
+              </Text>
+            </Flex>
+          )}
+        </Flex>
+
+        {status.type && (
+          <Text size="1" color={status.type === "success" ? "green" : "red"}>
+            {status.message}
+          </Text>
+        )}
+
+        {!isAuctionEnded && !isSeller && !showBidForm && (
+          <Button size="2" onClick={() => setShowBidForm(true)} disabled={isProcessing}>
+            Place Bid
+          </Button>
+        )}
+
+        {!isAuctionEnded && !isSeller && showBidForm && (
+          <Flex direction="column" gap="2">
+            <TextField.Root 
+              placeholder={`Min: ${(auction.current_bid / 1e9).toFixed(2)} SUI`}
+              value={bidAmount} 
+              onChange={(e) => setBidAmount(e.target.value)} 
+            />
+            <Flex gap="2">
+              <Button size="2" onClick={handlePlaceBid} disabled={isProcessing}>
+                Bid
+              </Button>
+              <Button size="2" variant="soft" onClick={() => setShowBidForm(false)}>
+                Cancel
+              </Button>
+            </Flex>
+          </Flex>
+        )}
+
+        {isAuctionEnded && (
+          <Button size="2" onClick={handleFinalizeAuction} disabled={isProcessing}>
+            {isProcessing ? "Finalizing..." : "Finalize Auction"}
+          </Button>
+        )}
+
+        {!isAuctionEnded && isSeller && !auction.highest_bidder && (
+          <Button size="2" variant="soft" color="red" onClick={handleCancelAuction} disabled={isProcessing}>
+            {isProcessing ? "Cancelling..." : "Cancel Auction"}
+          </Button>
+        )}
+      </Flex>
+    </Card>
   );
 }
 
