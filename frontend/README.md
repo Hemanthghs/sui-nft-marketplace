@@ -2,7 +2,7 @@
 
 This dApp was created using `@mysten/create-dapp` that sets up a basic React
 Client dApp using the following tools:
-
+ 
 - [React](https://react.dev/) as the UI framework
 - [TypeScript](https://www.typescriptlang.org/) for type checking
 - [Vite](https://vitejs.dev/) for build tooling
